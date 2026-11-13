@@ -28,13 +28,13 @@ author: producer
 ## Tickets
 
 - `01-flower-shop-page`: standard, frontend. The page, seed text and deletion of the example effect.
-- The brief allows two tickets. The second slot is kept for a G4 condition or a QA blocker.
+- `02-favicon`: standard, frontend. SVG favicon in the site's colours. The owner asked for it after QA found a favicon 404. This uses the brief's second and last ticket slot.
 
 ## Gate criteria
 
 ### G4 working build
 
-- Ticket 01 is merged.
+- Tickets 01 and 02 are merged.
 - `/` shows the hero, opening hours and contact, and is complete with JavaScript off.
 - The site has one public page: `/examples/glow` is gone and the route sweep finds only `/`.
 - `pnpm lint`, `typecheck`, `test`, `check:assets` and `smoke` pass on the merged build.
