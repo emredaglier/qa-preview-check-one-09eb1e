@@ -26,7 +26,7 @@
 //                       exit code is the result.
 //   SMOKE_EXTRA_SECRETS a JSON array of strings the secrets-in-bundle spec must not find. To see
 //                       that spec fail, name a string the page serves:
-//                       SMOKE_EXTRA_SECRETS='["Glow example"]' pnpm smoke -g "no server secret"
+//                       SMOKE_EXTRA_SECRETS='["Opening hours"]' pnpm smoke -g "no server secret"
 //   SMOKE_BUILT_FILES   set by this script, not by you: a JSON file listing every script and stylesheet
 //                       of the image's `.next/static`, for the secrets-in-bundle spec
 //   SMOKE_KEEP=1        keep the temp dir and container for debugging

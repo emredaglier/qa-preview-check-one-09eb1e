@@ -9,7 +9,7 @@ export type IdleResult =
 
 export type Report = {
   generatedAt: string
-  /** Keyed `<project>/<scenario id>`, e.g. `chromium-4x/glow-sweep`. */
+  /** Keyed `<project>/<scenario id>`, e.g. `chromium-4x/pointer-sweep`. */
   frames: Record<string, FrameResult>
   idle: IdleResult
 }

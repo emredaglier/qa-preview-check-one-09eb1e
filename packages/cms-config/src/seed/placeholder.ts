@@ -1,11 +1,11 @@
 /**
- * The placeholder content `pnpm seed` writes into the Site global. A project replaces it with its
- * own text (or deletes the seed once the owner fills the admin in).
+ * The content `pnpm seed` writes into the Site global: a fictional flower shop. The owner fills the
+ * admin in later, or the seed is deleted.
  */
 export const PLACEHOLDER_SITE = {
-  name: 'Project name',
-  tagline: 'A placeholder page, read through the Payload Local API.',
-  intro:
-    'This text is stored in the CMS database and rendered on the server, so it is visible with JavaScript turned off.',
-  defaultDescription: 'A placeholder site built from the house starter.',
+  name: 'Lilac & Linden',
+  tagline: 'Seasonal flowers in Alsancak, İzmir.',
+  intro: 'Bouquets, plants and table flowers, made to order.',
+  defaultDescription:
+    'Lilac & Linden, a fictional flower shop in Alsancak, İzmir: opening hours and contact.',
 } as const

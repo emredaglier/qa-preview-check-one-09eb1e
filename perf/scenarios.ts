@@ -30,24 +30,12 @@ export type Scenario = {
 
 /**
  * The page the idle-CPU check opens: one that runs a decorative loop. `null` when the project has
- * none, and the check is then skipped with a notice. A project that drops the example effect
- * points this at its own loop's page, or sets it to `null`.
+ * none, and the check is then skipped with a notice. A project with such a loop points
+ * this at its page.
  */
-export const IDLE_PATH: string | null = '/examples/glow'
+export const IDLE_PATH: string | null = null
 
-export const SCENARIOS: Scenario[] = [
-  {
-    id: 'glow-sweep',
-    title: 'Example glow (packages/motion/src/glow): pointer across the canvas',
-    path: '/examples/glow',
-    requires: 'canvas[data-perf="glow"]',
-    steps: [
-      { do: 'wait', ms: 1000 },
-      { do: 'sweep', selector: 'canvas[data-perf="glow"]', steps: 60, intervalMs: 16 },
-      { do: 'wait', ms: 500 },
-    ],
-  },
-]
+export const SCENARIOS: Scenario[] = []
 
 /** Why a scenario cannot run (a notice for the log and the report), or null if it can. */
 export function skipReason(scenario: Scenario, matches: number): string | null {

@@ -24,9 +24,9 @@ describe('discoverRoutes', () => {
     page('about')
     page('(site)/work')
     page('(site)/(deep)/work/archive')
-    page('examples/glow', 'page.ts')
+    page('examples/gallery', 'page.ts')
     expect(discoverRoutes(app)).toEqual({
-      static: ['/', '/about', '/examples/glow', '/work', '/work/archive'],
+      static: ['/', '/about', '/examples/gallery', '/work', '/work/archive'],
       dynamic: [],
     })
   })
