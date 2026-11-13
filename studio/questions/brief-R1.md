@@ -68,3 +68,9 @@ If you want a real deploy, answer no, and round 2 asks about the domain, server,
 - Agents cannot see the page, so the look in Safari and Firefox needs your eyes at G5.
 
 ➡️ Yes: current Chrome, Safari (macOS, iOS) and Firefox, phone and desktop. The look in Safari and Firefox is checked by you at G5.
+
+## Comments
+
+### Owner, 2026-11-13T11:16:46.887Z
+
+yes all
