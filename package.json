@@ -1,0 +1,40 @@
+{
+  "name": "house-starter",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
+    "lint": "node scripts/check-effects.mjs && eslint . && prettier --check .",
+    "lint:fix": "eslint . --fix && prettier --write .",
+    "format": "prettier --write .",
+    "check:assets": "node scripts/check-assets.ts",
+    "typecheck": "tsc --noEmit && pnpm -r --parallel typecheck",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build": "pnpm -r --workspace-concurrency=1 build",
+    "dev": "pnpm --filter @house/web dev",
+    "start": "pnpm --filter @house/web start",
+    "perf": "node perf/run.ts",
+    "perf:check": "node perf/check.ts",
+    "migrate": "pnpm --filter @house/cms migrate",
+    "seed": "pnpm --filter @house/cms seed",
+    "smoke": "node smoke/run.ts"
+  },
+  "devDependencies": {
+    "@aws-sdk/client-s3": "3.1157.0",
+    "@axe-core/playwright": "4.14.0",
+    "@playwright/test": "1.63.0",
+    "@types/node": "24.19.1",
+    "eslint": "9.39.5",
+    "eslint-config-next": "16.4.5",
+    "jsdom": "30.1.2",
+    "prettier": "3.9.9",
+    "typescript": "5.9.3",
+    "vitest": "5.0.3",
+    "yaml": "2.9.1"
+  },
+  "engines": {
+    "node": ">=24.15.0 <25"
+  },
+  "packageManager": "pnpm@11.28.5+sha512.484563d30b4c2ad27cb48aa94ff2b302dbcebc8ff6bf28816c2589886e146ce7f76f354f3bc1a438e6f5e9768c302aa0a6f7add8232903cd4cf81426cbc14d9e"
+}

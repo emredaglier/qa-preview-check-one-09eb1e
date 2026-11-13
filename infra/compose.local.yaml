@@ -1,0 +1,60 @@
+# Laptop override: `:local` images (build them first, see infra/README.md), a Docker-managed
+# data volume, dummy secrets, and plain HTTP on http://127.0.0.1:8080.
+#
+#   docker compose -f infra/compose.yaml -f infra/compose.local.yaml up
+# web never signs anything, so it gets its own PAYLOAD_SECRET, never the cms one (see README).
+x-local-web-env: &local-web-env
+  PAYLOAD_SECRET: local-only-web-payload-secret
+  REVALIDATE_SECRET: local-only-revalidate-secret
+# A production cms (and the migrate one-off, same config) refuses to start without CMS_ORIGINS.
+x-local-cms-env: &local-cms-env
+  PAYLOAD_SECRET: local-only-cms-payload-secret
+  REVALIDATE_SECRET: local-only-revalidate-secret
+  CMS_ORIGINS: http://127.0.0.1:3001,http://localhost:3001
+
+services:
+  migrate:
+    env_file: !reset []
+    environment: *local-cms-env
+  caddy:
+    ports: !override
+      - '127.0.0.1:8080:80'
+    volumes: !override
+      - ./caddy/Caddyfile.local:/etc/caddy/Caddyfile:ro
+      - ./caddy/site.caddy:/etc/caddy/site.caddy:ro
+      - caddy_data:/data
+      - caddy_config:/config
+  web:
+    env_file: !reset []
+    environment: *local-web-env
+  web-preview:
+    env_file: !reset []
+    environment: *local-web-env
+  cms:
+    env_file: !reset []
+    environment: *local-cms-env
+  # Litestream against a local S3 stand-in. adobe/s3mock accepts any credentials.
+  s3mock:
+    image: adobe/s3mock:latest
+    environment:
+      COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS: ${R2_DB_BACKUP_BUCKET:-${PROJECT_NAME}-db-backups}
+    healthcheck:
+      test: ['CMD', 'bash', '-c', 'exec 3<>/dev/tcp/127.0.0.1/9090']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+  litestream:
+    env_file: !reset []
+    environment:
+      LITESTREAM_BUCKET: ${R2_DB_BACKUP_BUCKET:-${PROJECT_NAME}-db-backups}
+      LITESTREAM_ENDPOINT: http://s3mock:9090
+      LITESTREAM_REGION: us-east-1
+      LITESTREAM_ACCESS_KEY_ID: local
+      LITESTREAM_SECRET_ACCESS_KEY: local-only-secret
+    depends_on:
+      s3mock:
+        condition: service_healthy
+
+volumes:
+  data: !override {}

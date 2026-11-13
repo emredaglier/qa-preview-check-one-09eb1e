@@ -1,0 +1,93 @@
+# Nightly copy of new media from the media bucket to the backup bucket (ADR-0009).
+# Runs on GitHub, so the VPS does no work. It only ever COPIES: never a sync, and no delete flags
+# (infra/media-backup.test.ts fails if one appears). The backup credentials have no delete
+# permission in practice: the backup bucket is locked (infra/cloudflare.sh), see infra/README.md.
+name: media-backup
+
+on:
+  schedule:
+    - cron: '17 1 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: media-backup
+  cancel-in-progress: false
+
+jobs:
+  copy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      RCLONE_CONFIG_SRC_TYPE: s3
+      RCLONE_CONFIG_SRC_PROVIDER: Cloudflare
+      RCLONE_CONFIG_SRC_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+      RCLONE_CONFIG_SRC_ACCESS_KEY_ID: ${{ secrets.R2_MEDIA_READ_KEY_ID }}
+      RCLONE_CONFIG_SRC_SECRET_ACCESS_KEY: ${{ secrets.R2_MEDIA_READ_SECRET }}
+      RCLONE_CONFIG_DST_TYPE: s3
+      RCLONE_CONFIG_DST_PROVIDER: Cloudflare
+      RCLONE_CONFIG_DST_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+      RCLONE_CONFIG_DST_ACCESS_KEY_ID: ${{ secrets.R2_BACKUP_WRITE_KEY_ID }}
+      RCLONE_CONFIG_DST_SECRET_ACCESS_KEY: ${{ secrets.R2_BACKUP_WRITE_SECRET }}
+    steps:
+      - uses: actions/checkout@v5
+      # The bucket names come from infra/project.env (<project>-media and <project>-backup).
+      - name: Read the project settings
+        run: |
+          . infra/project.sh
+          echo "SRC_BUCKET=$R2_MEDIA_BUCKET" >> "$GITHUB_ENV"
+          echo "DST_BUCKET=$R2_MEDIA_BACKUP_BUCKET" >> "$GITHUB_ENV"
+
+      - name: Check secrets
+        id: gate
+        run: |
+          if [ -z "$R2_ACCOUNT_ID" ] || [ -z "$RCLONE_CONFIG_SRC_ACCESS_KEY_ID" ] || [ -z "$RCLONE_CONFIG_SRC_SECRET_ACCESS_KEY" ] ||
+            [ -z "$RCLONE_CONFIG_DST_ACCESS_KEY_ID" ] || [ -z "$RCLONE_CONFIG_DST_SECRET_ACCESS_KEY" ]; then
+            echo "Backup secrets are not set yet (infra/README.md, CI secrets); skipping."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # A pinned release, not Ubuntu's rclone 1.60.1: that one got 501s from R2 , and
+      # installing it from apt took minutes. The checksum is the release's SHA256SUMS entry.
+      # Not named RCLONE_*: rclone reads every RCLONE_* variable as a flag (RCLONE_VERSION = --version).
+      - name: Install rclone
+        if: steps.gate.outputs.ready == 'true'
+        env:
+          PINNED_RCLONE_VERSION: v1.75.2
+          PINNED_RCLONE_SHA256: 349ac8fba6ff65d6247043f1750cdcb518ec5d500ef91463a10d37c0ccdf3702
+        run: |
+          name="rclone-${PINNED_RCLONE_VERSION}-linux-amd64"
+          curl -fsSLo "$RUNNER_TEMP/$name.zip" \
+            "https://github.com/rclone/rclone/releases/download/${PINNED_RCLONE_VERSION}/$name.zip"
+          echo "${PINNED_RCLONE_SHA256}  $RUNNER_TEMP/$name.zip" | sha256sum -c -
+          unzip -q -j "$RUNNER_TEMP/$name.zip" "$name/rclone" -d "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/rclone" version
+
+      - name: Copy new media and check the backup
+        if: steps.gate.outputs.ready == 'true'
+        run: |
+          set -o pipefail
+          # Skipped: the static releases (_next/) and the trash prefix (soft-deleted files).
+          skip=(--exclude '_next/**' --exclude 'trash/**')
+          # What is in the media bucket now. The check below asks for exactly these names, so an
+          # upload during the run can't fail it.
+          rclone lsf -R --files-only "${skip[@]}" "SRC:${SRC_BUCKET}" > "$RUNNER_TEMP/listed.txt"
+          # Objects are immutable, so a key that already exists in the backup is never rewritten.
+          rclone copy "SRC:${SRC_BUCKET}" "DST:${DST_BUCKET}" "${skip[@]}" \
+            --size-only --s3-no-check-bucket \
+            --transfers 8 --stats-one-line -v 2>&1 | tee "$RUNNER_TEMP/copy.log"
+          # rclone retries a failed attempt; a run can pass after errors. Say so .
+          if grep -q 'ERROR :' "$RUNNER_TEMP/copy.log"; then
+            msg="rclone logged errors and recovered on a retry. See the copy log above."
+            echo "::warning title=Backup copy::$msg"
+            echo "**Backup copy:** $msg" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          # Every listed object must now be in the backup, at the same size. Read-only.
+          rclone check "SRC:${SRC_BUCKET}" "DST:${DST_BUCKET}" --one-way --size-only \
+            --files-from "$RUNNER_TEMP/listed.txt"

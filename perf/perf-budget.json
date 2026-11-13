@@ -1,0 +1,15 @@
+{
+  "frames": {
+    "chromium-4x/glow-sweep": {
+      "p95Ms": 50,
+      "droppedPct": 5
+    },
+    "webkit/glow-sweep": {
+      "p95Ms": 50,
+      "droppedPct": 5
+    }
+  },
+  "idle": {
+    "cpuPct": 5
+  }
+}

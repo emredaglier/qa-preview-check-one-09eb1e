@@ -1,0 +1,11 @@
+# Local Caddy: plain HTTP on :80 inside the container (published on 127.0.0.1:8080 by
+# compose.local.yaml). Same site rules as production, no TLS, no hostnames.
+{
+	auto_https off
+}
+
+import /etc/caddy/site.caddy
+
+:80 {
+	import site
+}

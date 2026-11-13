@@ -1,0 +1,314 @@
+# CI and delivery (ADR-0005). This file only orchestrates: every step is a command of infra/ci.sh
+# that also runs on a laptop. Secrets and variables: infra/README.md, "CI secrets". Steps that need
+# the owner's secrets skip cleanly while those are unset, so the pipeline is green from day one.
+#
+# Two paths:
+#  - Pull requests and pushes to main run `check` (lint, the asset-weight budget, types, unit tests)
+#    and `browser` (the web image built for this commit and the browser checks of the smoke gate:
+#    route sweep, accessibility, secrets in the bundle, WebGL fallback, and the self-tests of those
+#    checks; ADR-0012). Nothing is published from them.
+#  - A release tag (v1.2.3) runs the whole delivery: `check`, then `build` (images, then the smoke
+#    test on the same runner, without the self-tests of the checks), then `upload`, `push` and
+#    `deploy`. Nothing is built into an image, published, uploaded to the CDN or deployed from
+#    anywhere but a release tag. HQ cuts the tag after the owner's launch approval; the repo
+#    restricts who may create `v*` tags.
+#
+# Shape: `build` needs `check`, so no image reaches GHCR from a tag that failed lint, types or unit
+# tests, or that is not on main (`check` verifies that first). The cost is a longer release run:
+# `check` and `build` are in sequence. Nothing is uploaded to the CDN, tagged `latest` or deployed
+# unless `check` passed too (`upload` needs it, and `push` and `deploy` need `upload`).
+#
+# The images never travel as an artifact (GitHub Free has 500 MB of artifact storage): `build`
+# pushes the smoke-tested images' <tag> to GHCR and hands their digests to the later jobs, which
+# pull or retag exactly those digests.
+name: ci
+
+# `check` and `browser` are required checks on main (infra/README.md, "Setup"). A required check
+# that never starts stays pending and blocks the merge for ever, so a pull request always runs both:
+# no `paths` filter on it, a docs-only change included. A push to main has no required check; a
+# change there only under docs/ or .scratch/ (in no image; Prettier ignores both) starts no run.
+# GitHub does not apply `paths` to a tag push.
+on:
+  push:
+    branches: [main]
+    tags: ['v[0-9]*']
+    paths:
+      - '**'
+      - '!docs/**'
+      - '!.scratch/**'
+  pull_request:
+
+permissions:
+  contents: read
+
+# A newer push to a pull request replaces its running checks. A release is never cancelled midway.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# GITHUB_REPOSITORY_OWNER and GITHUB_ACTOR are set by the runner; infra/ci.sh derives the image
+# prefix (ghcr.io/<owner>/<project>) from them and infra/project.env.
+env:
+  # Never ask for a package-manager prompt or send telemetry from CI.
+  CI: 'true'
+  NEXT_TELEMETRY_DISABLED: '1'
+  # The release tag on a tag run, the commit otherwise.
+  RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || github.sha }}
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      # The whole history, so a release tag can be checked against main.
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: The tag is on main
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        run: infra/ci.sh verify-release "$RELEASE"
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # No browser here: no unit test starts one. The smoke test in `browser` and `build` does.
+      - name: Workflow lint, lint, typecheck, unit tests
+        run: infra/ci.sh check
+
+  # The browser checks on every pull request and on main (ADR-0012): the web image of this commit
+  # is built (not published) and the smoke gate runs against it, as `build` does on a tag. A pull
+  # request needs no secrets, and no job here gets a registry or deploy permission.
+  browser:
+    if: "!(github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v4
+      # Every pull request reads the layer cache; only main writes it. The key is per commit, so a
+      # cache saved by each pull request would be a new entry per push, and the repository's cache
+      # allowance would evict the entries main saved.
+      - uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/buildx-cache
+          key: buildx-${{ github.sha }}
+          restore-keys: buildx-
+      # Only web is smoke-tested, so only web is built.
+      - name: Build the web image
+        env:
+          CI_BUILD_CACHE_DIR: ${{ runner.temp }}/buildx-cache
+          CI_TARGETS: web
+        run: infra/ci.sh build "$RELEASE"
+      - uses: actions/cache/save@v6
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          path: ${{ runner.temp }}/buildx-cache
+          key: buildx-${{ github.sha }}
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # See `build` for the browser cache. Each download has its own timeout: a hung package
+      # mirror should fail in minutes and be re-run, not hold the job to its own limit.
+      - uses: actions/cache@v6
+        id: playwright
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-chromium-${{ hashFiles('pnpm-lock.yaml') }}
+      - if: steps.playwright.outputs.cache-hit != 'true'
+        timeout-minutes: 10
+        run: pnpm exec playwright install --with-deps chromium
+      - if: steps.playwright.outputs.cache-hit == 'true'
+        timeout-minutes: 5
+        run: pnpm exec playwright install-deps chromium
+      - name: Smoke test and browser checks against the built web image
+        run: infra/ci.sh smoke "$RELEASE"
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        # A report, not a result: if it can't be stored (the storage quota), the run fails only on
+        # the checks themselves.
+        continue-on-error: true
+        with:
+          name: smoke-output
+          path: smoke/.output
+          include-hidden-files: true
+          retention-days: 2
+          if-no-files-found: ignore
+
+  # Everything below runs on a release tag only.
+
+  build:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    # Publishing is irreversible: a tag that is not on main, or fails `check`, must push no image.
+    needs: check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      web: ${{ steps.publish.outputs.web }}
+      cms: ${{ steps.publish.outputs.cms }}
+      migrate: ${{ steps.publish.outputs.migrate }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v4
+      - uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/buildx-cache
+          key: buildx-${{ github.sha }}
+          restore-keys: buildx-
+      - name: Build web, cms and migrate for linux/amd64
+        env:
+          CI_BUILD_CACHE_DIR: ${{ runner.temp }}/buildx-cache
+        run: infra/ci.sh build "$RELEASE"
+      # The smoke test runs here, against the images this runner just built, so they never have
+      # to travel to another job as an artifact.
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # The browser download is cached; the system libraries are not part of ~/.cache, so they are
+      # installed on a hit too (cheap), and everything is fetched on a miss.
+      - uses: actions/cache@v6
+        id: playwright
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-chromium-${{ hashFiles('pnpm-lock.yaml') }}
+      - if: steps.playwright.outputs.cache-hit != 'true'
+        timeout-minutes: 10
+        run: pnpm exec playwright install --with-deps chromium
+      - if: steps.playwright.outputs.cache-hit == 'true'
+        timeout-minutes: 5
+        run: pnpm exec playwright install-deps chromium
+      - name: Smoke test against the built web image
+        run: infra/ci.sh smoke "$RELEASE"
+      # Only images that passed the smoke test reach the registry, and only their <tag>: `latest`
+      # moves in `push`, after `check` and `upload`. The digests go to the later jobs.
+      - name: Publish the release images to GHCR
+        id: publish
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: infra/ci.sh publish "$RELEASE"
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        # A report, not a result: if it can't be stored (the storage quota), the run fails only on
+        # the smoke test itself.
+        continue-on-error: true
+        with:
+          name: smoke-output
+          path: smoke/.output
+          # smoke/.output is a dot-directory: upload-artifact skips hidden files by default.
+          # Two days: enough to look at a failure, and the account has 500 MB of artifact storage.
+          include-hidden-files: true
+          retention-days: 2
+          if-no-files-found: ignore
+
+  upload:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [check, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    env:
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_MEDIA_WRITE_KEY_ID: ${{ secrets.R2_MEDIA_WRITE_KEY_ID }}
+      R2_MEDIA_WRITE_SECRET: ${{ secrets.R2_MEDIA_WRITE_SECRET }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Check secrets
+        id: gate
+        run: infra/ci.sh gate upload
+      - uses: actions/setup-node@v5
+        if: steps.gate.outputs.ready == 'true'
+        with:
+          node-version: 24
+          # v5 caches the package manager named in package.json by itself, and pnpm is not installed yet here.
+          package-manager-cache: false
+      - name: Install the upload dependencies
+        if: steps.gate.outputs.ready == 'true'
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile --filter . --ignore-scripts
+      - name: Upload the static files of the published web image to the CDN
+        if: steps.gate.outputs.ready == 'true'
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WEB_IMAGE: ${{ needs.build.outputs.web }}
+        run: infra/ci.sh upload "$RELEASE"
+
+  push:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [build, upload]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+      - name: Move the latest tags to the published digests
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WEB_IMAGE: ${{ needs.build.outputs.web }}
+          CMS_IMAGE: ${{ needs.build.outputs.cms }}
+          MIGRATE_IMAGE: ${{ needs.build.outputs.migrate }}
+        run: infra/ci.sh push "$RELEASE"
+
+  deploy:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [push, upload]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # One deploy at a time. A running deploy is never cancelled; a newer one waits.
+    concurrency:
+      group: deploy
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: read
+    env:
+      GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+      DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+      DEPLOY_HOST_KEY: ${{ secrets.DEPLOY_HOST_KEY }}
+      TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+      TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_MEDIA_WRITE_KEY_ID: ${{ secrets.R2_MEDIA_WRITE_KEY_ID }}
+      R2_MEDIA_WRITE_SECRET: ${{ secrets.R2_MEDIA_WRITE_SECRET }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Check secrets
+        id: gate
+        run: infra/ci.sh gate deploy
+      - uses: actions/setup-node@v5
+        if: steps.gate.outputs.ready == 'true'
+        with:
+          node-version: 24
+          # v5 caches the package manager named in package.json by itself, and pnpm is not installed yet here.
+          package-manager-cache: false
+      - name: Install the prune dependencies
+        if: steps.gate.outputs.ready == 'true'
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile --filter . --ignore-scripts
+      - name: Join the tailnet
+        if: steps.gate.outputs.ready == 'true'
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+      - name: Deploy (red on failure, after the automatic rollback)
+        if: steps.gate.outputs.ready == 'true'
+        run: infra/ci.sh deploy "$RELEASE"

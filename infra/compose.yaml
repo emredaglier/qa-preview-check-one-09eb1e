@@ -1,0 +1,151 @@
+# Production stack (ADR-0004). Run from this directory on the server, or with
+# `docker compose -f infra/compose.yaml -f infra/compose.local.yaml up` on a laptop.
+#
+# Rules (see infra/README.md, "Docker and ufw"):
+# - Only caddy publishes non-loopback ports. Published container ports bypass ufw.
+# - cms and web-preview bind 127.0.0.1 only; tailscale serve reaches them there.
+# - Images are pulled, never built on the server. RELEASE picks the tag.
+#
+# Per-project names come from infra/project.env: the deploy script exports them, and a laptop passes
+# them with `--env-file infra/project.env`.
+# Variables: PROJECT_NAME, DOMAIN (project.env), RELEASE (image tag), IMAGE_PREFIX, DATA_DIR,
+# ENV_DIR, CERTS_DIR.
+
+name: ${PROJECT_NAME:?set PROJECT_NAME (docker compose --env-file infra/project.env ...)}
+
+x-app: &app
+  restart: unless-stopped
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+  logging:
+    driver: json-file
+    options: { max-size: 10m, max-file: '3' }
+
+services:
+  # One-off: applies the committed migrations, then exits 0. Additive migrations (ADR-0003) mean
+  # the previous release keeps working. The seed runs in this image too.
+  migrate:
+    image: ${IMAGE_PREFIX:-${PROJECT_NAME}}/migrate:${RELEASE:-local}
+    restart: 'no'
+    environment:
+      DATABASE_PATH: /data/site.db
+      # For the seed, which saves through the revalidate hooks like cms does. A failed post is
+      # logged and never fails the seed. Migrations don't save through hooks. Keep equal to cms.
+      REVALIDATE_URLS: http://web:3000/internal/revalidate,http://web-preview:3000/internal/revalidate
+    env_file: ${ENV_DIR:-/opt/${PROJECT_NAME}/env}/cms.env
+    volumes:
+      - data:/data
+    mem_limit: 384m
+
+  caddy:
+    image: caddy:2.11.7-alpine
+    restart: unless-stopped
+    depends_on:
+      web:
+        condition: service_healthy
+    environment:
+      # The site's host name for Caddyfile ({$DOMAIN}).
+      DOMAIN: ${DOMAIN:?set DOMAIN (infra/project.env)}
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      # The whole directory, not single files: deploy.sh replaces the files when the release
+      # changes (a single-file mount would keep the old inode) and then reloads Caddy.
+      - ./caddy:/etc/caddy:ro
+      - ${CERTS_DIR:-/opt/${PROJECT_NAME}/certs}:/certs:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:2019/config/']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    mem_limit: 96m
+    logging:
+      driver: json-file
+      options: { max-size: 10m, max-file: '3' }
+
+  # Public site. Opens the SQLite file read-only at connection level. The volume
+  # itself is writable because WAL readers need the -shm file.
+  web:
+    <<: *app
+    image: ${IMAGE_PREFIX:-${PROJECT_NAME}}/web:${RELEASE:-local}
+    env_file: ${ENV_DIR:-/opt/${PROJECT_NAME}/env}/web.env
+    environment:
+      DATABASE_PATH: /data/site.db
+      NODE_OPTIONS: --max-old-space-size=256
+    volumes:
+      - data:/data
+    mem_limit: 384m
+
+  # Same image as web with drafts enabled. Tailnet only, via 127.0.0.1:3002.
+  web-preview:
+    <<: *app
+    image: ${IMAGE_PREFIX:-${PROJECT_NAME}}/web:${RELEASE:-local}
+    env_file: ${ENV_DIR:-/opt/${PROJECT_NAME}/env}/web.env
+    environment:
+      PREVIEW: '1'
+      DATABASE_PATH: /data/site.db
+      NODE_OPTIONS: --max-old-space-size=256
+    ports:
+      - '127.0.0.1:3002:3000'
+    volumes:
+      - data:/data
+    mem_limit: 384m
+
+  # Payload admin and API, the only writer. Tailnet only, via 127.0.0.1:3001. After a save it
+  # calls web's revalidation endpoint over this network.
+  cms:
+    <<: *app
+    image: ${IMAGE_PREFIX:-${PROJECT_NAME}}/cms:${RELEASE:-local}
+    env_file: ${ENV_DIR:-/opt/${PROJECT_NAME}/env}/cms.env
+    environment:
+      DATABASE_PATH: /data/site.db
+      REVALIDATE_URLS: http://web:3000/internal/revalidate,http://web-preview:3000/internal/revalidate
+      NODE_OPTIONS: --max-old-space-size=384
+    ports:
+      - '127.0.0.1:3001:3001'
+    volumes:
+      - data:/data
+    mem_limit: 512m
+
+  # Continuous SQLite backup to the private R2 bucket (ADR-0003). Shares the data
+  # volume, runs as the app uid, never writes app data. Config: litestream/litestream.yml;
+  # settings in $ENV_DIR/litestream.env. Runbook: infra/README.md, "Backups: Litestream".
+  litestream:
+    <<: *app
+    image: litestream/litestream:0.5.17
+    user: '10001:10001'
+    command: ['replicate', '-config', '/etc/litestream/litestream.yml']
+    env_file: ${ENV_DIR:-/opt/${PROJECT_NAME}/env}/litestream.env
+    read_only: true
+    tmpfs:
+      - /var/run/litestream:uid=10001,gid=10001,mode=0700
+    volumes:
+      - data:/data
+      # A directory mount, like caddy's (deploy.sh recreates the service when the config changed).
+      - ./litestream:/etc/litestream:ro
+    healthcheck:
+      # Status is `ok` only while the database is initialised and replicating.
+      test:
+        ['CMD-SHELL', "litestream status -config /etc/litestream/litestream.yml | grep -q '  ok  '"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    mem_limit: 128m
+
+volumes:
+  # On the server this is a bind mount of DATA_DIR. It must be owned by uid 10001 (the app user
+  # in the images): `sudo chown 10001:10001 /opt/<project>/data`.
+  data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_DIR:-/opt/${PROJECT_NAME}/data}
+  caddy_data:
+  caddy_config:

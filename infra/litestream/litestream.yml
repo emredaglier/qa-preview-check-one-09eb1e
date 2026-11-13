@@ -1,0 +1,36 @@
+# Litestream config (ADR-0003). Values come from the environment (Litestream expands
+# $VAR / ${VAR}): see infra/README.md, "Backups: Litestream".
+#
+# Checkpointing: Litestream owns WAL checkpoints. It holds a long read transaction and only lets a
+# checkpoint through once the WAL pages are replicated, so nothing else may run
+# `PRAGMA wal_checkpoint(TRUNCATE|RESTART)` or set wal_autocheckpoint to 0 (cms and web do neither;
+# the default passive auto-checkpoint of SQLite is what Litestream expects). The app keeps
+# `busy_timeout` so it waits out Litestream's brief checkpoint locks. Litestream runs next to the
+# apps on the same /data volume (the -shm file must be shared) and as the same uid (10001).
+
+# Control socket: used by `litestream status` (health check) and `litestream sync` (the
+# infra/litestream/snapshot.sh hook).
+socket:
+  enabled: true
+  path: /var/run/litestream/litestream.sock
+
+# Full snapshot every 6 hours, kept for 7 days. Between snapshots, WAL segments (LTX files) are
+# shipped every `sync-interval`, so the loss window after a crash is a few seconds. Restore
+# time is one snapshot plus at most 6 hours of segments.
+snapshot:
+  interval: 6h
+  retention: 168h
+
+dbs:
+  - path: /data/site.db
+    replica:
+      type: s3
+      bucket: ${LITESTREAM_BUCKET}
+      path: site.db
+      endpoint: ${LITESTREAM_ENDPOINT}
+      region: ${LITESTREAM_REGION}
+      # R2 and MinIO both want path-style requests with a fixed region ("auto" on R2).
+      force-path-style: true
+      access-key-id: ${LITESTREAM_ACCESS_KEY_ID}
+      secret-access-key: ${LITESTREAM_SECRET_ACCESS_KEY}
+      sync-interval: 5s

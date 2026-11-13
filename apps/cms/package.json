@@ -1,0 +1,36 @@
+{
+  "name": "@house/cms",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev --webpack --port 3001",
+    "build": "DATABASE_PATH=${DATABASE_PATH:-./data/build.db} PAYLOAD_SECRET=${PAYLOAD_SECRET:-build-only-secret} next build --webpack",
+    "start": "next start --port 3001",
+    "payload": "payload",
+    "generate:types": "payload generate:types",
+    "generate:importmap": "payload generate:importmap",
+    "migrate": "payload migrate",
+    "seed": "payload run scripts/seed.ts --",
+    "migrate:create": "payload migrate:create",
+    "typecheck": "next typegen && tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.1",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "typescript": "5.9.3"
+  },
+  "dependencies": {
+    "@house/cms-config": "workspace:*",
+    "@payloadcms/next": "3.90.2",
+    "@payloadcms/richtext-lexical": "3.90.2",
+    "@payloadcms/ui": "3.90.2",
+    "graphql": "^16.14.2",
+    "libsql": "0.4.7",
+    "next": "16.4.5",
+    "payload": "3.90.2",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  }
+}

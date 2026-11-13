@@ -1,0 +1,26 @@
+packages:
+  - apps/*
+  - packages/*
+
+# Security overrides: they fix known advisories in transitive dependencies. Overrides for packages
+# that aren't installed do nothing.
+overrides:
+  dompurify: '>=3.4.13'
+  undici: '>=7.29.1'
+  'brace-expansion@5': '>=5.0.12'
+  source-map-js: '>=1.2.2'
+  '@tailwindcss/typography>postcss-selector-parser': '>=7.1.6'
+  '@esbuild-kit/core-utils>esbuild': '>=0.25.0'
+  happy-dom: '>=21.0.4'
+  minimatch@>=7 <11.0.1: '>=11.0.1'
+
+allowBuilds:
+  esbuild: true
+  unrs-resolver: true
+
+# Don't install package versions published in the last 3 days (minutes), so a freshly
+# compromised release has time to be caught and pulled. Applies to new resolutions only;
+# `--frozen-lockfile` installs are unaffected.
+minimumReleaseAge: 4320
+
+engineStrict: true

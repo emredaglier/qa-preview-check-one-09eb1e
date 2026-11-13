@@ -1,0 +1,6 @@
+# Used by drill.sh on top of compose.yaml + compose.local.yaml: no fixed host ports, so the drill
+# cannot clash with a running stack. cms gets a random loopback port (read it with `compose port`).
+services:
+  cms:
+    ports: !override
+      - '127.0.0.1::3001'

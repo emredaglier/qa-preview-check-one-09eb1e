@@ -1,0 +1,18 @@
+# Shared by the production Caddyfile and the local one: what the public site does.
+(site) {
+	encode zstd gzip
+
+	# Internal endpoints are reachable on the Docker network only. Revalidation is called by cms;
+	# the draft-preview entry belongs to the preview instance (tailnet only, ADR-0002).
+	@internal path /internal /internal/* /preview /preview/*
+	handle @internal {
+		respond "Not Found" 404
+	}
+
+	handle {
+		reverse_proxy web:3000 {
+			health_uri /internal/health
+			health_interval 30s
+		}
+	}
+}
