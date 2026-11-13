@@ -1,4 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <title>Flower</title>
   <circle cx="16" cy="16" r="16" fill="#faf6fb"/>
   <g fill="#5b3a7a">
     <circle cx="16" cy="9" r="6"/>
