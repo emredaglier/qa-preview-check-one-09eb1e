@@ -15,8 +15,7 @@ import { publicRoutes } from './routes.ts'
 import { sweepProblems } from './sweep.ts'
 
 /**
- * Every public route of the site, found from its pages (smoke/routes.ts), `/examples/glow` (noindex
- * by design, but public) included. A project gives each dynamic page a sample URL there. The checks
+ * Every public route of the site, found from its pages (smoke/routes.ts), A project gives each dynamic page a sample URL there. The checks
  * that need a route to be indexable only look at response headers, which a meta robots tag does not
  * change, so no route needs an exemption.
  */

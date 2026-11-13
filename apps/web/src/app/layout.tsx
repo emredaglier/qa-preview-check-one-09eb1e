@@ -6,7 +6,7 @@ import type { ReactNode } from 'react'
 import './globals.css'
 import { MotionFaultReporter } from './MotionFaultReporter'
 
-export const metadata: Metadata = { title: 'Project name' }
+export const metadata: Metadata = { title: 'Lilac & Linden' }
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (

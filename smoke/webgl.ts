@@ -19,14 +19,8 @@ export type EffectPage = {
   canvas: string
 }
 
-/** The example effect's page. A project lists the pages of its own effects here. */
-export const EFFECT_PAGES: EffectPage[] = [
-  {
-    route: '/examples/glow',
-    text: ['Glow example', 'Plain HTML, in front of the canvas.'],
-    canvas: 'canvas[data-perf="glow"]',
-  },
-]
+/** A project lists the pages of its own effects here. Empty while the site has none. */
+export const EFFECT_PAGES: EffectPage[] = []
 
 export type Fault = { kind: string; detail: string }
 
